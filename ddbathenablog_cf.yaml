@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation:
+Parameters:
+  DynamoDBTableName:
+    Description: DynamoDB Table Name
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9]*'
+    MinLength: '1'
+    MaxLength: '255'
+    ConstraintDescription: must contain only alphanumeric characters
+  LambdaCodeBucket:
+    Description: S3 bucket containing the Lambda function code
+    Type: String
+Resources:
+  myDynamoDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      StreamSpecification: 
+        StreamViewType: NEW_IMAGE
+      AttributeDefinitions:
+        - AttributeName: Year
+          AttributeType: N
+        - AttributeName: Title
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Year
+          KeyType: HASH
+        - AttributeName: Title
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      TimeToLiveSpecification: 
+        Enabled: True
+        AttributeName: ExpireTime
+  myS3Bucket:
+    Type: 'AWS::S3::Bucket'
+  FirehoseDeliveryStream:
+    DependsOn:
+      - deliveryPolicy
+    Type: 'AWS::KinesisFirehose::DeliveryStream'
+    Properties:
+      DeliveryStreamName: !Ref DynamoDBTableName
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Join 
+          - ''
+          - - 'arn:aws:s3:::'
+            - !Ref myS3Bucket
+        BufferingHints:
+          IntervalInSeconds: '60'
+          SizeInMBs: '1'
+        CompressionFormat: UNCOMPRESSED
+        Prefix: firehose/
+        RoleARN: !GetAtt deliveryRole.Arn
+  deliveryRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Ref 'AWS::AccountId'
+  deliveryPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: firehose_delivery_policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:AbortMultipartUpload'
+              - 's3:GetBucketLocation'
+              - 's3:GetObject'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:PutObject'
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref myS3Bucket
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref myS3Bucket
+                  - '*'
+      Roles:
+        - !Ref deliveryRole
+  ddbToFirehose: 
+      Type: "AWS::Lambda::Function"
+      Properties: 
+        Handler: "ddb-to-firehose.lambda_handler"
+        Role: 
+          Fn::GetAtt: 
+            - "LambdaExecutionRole"
+            - "Arn"
+        Code: 
+          S3Bucket: !Ref LambdaCodeBucket
+          S3Key: "ddb-to-firehose.zip"
+        Runtime: "python3.6"
+        Timeout: "25"
+        Environment:
+          Variables:
+            DeliveryStreamName: !Ref DynamoDBTableName
+        TracingConfig:
+          Mode: "Active"
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: FirehoseFullAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            - firehose:*
+            - xray:*
+            - dynamodb:DescribeStream
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            - dynamodb:ListStreams
+            Resource: "*"
+  EventSourceMapping: 
+    Type: "AWS::Lambda::EventSourceMapping"
+    Properties: 
+      EventSourceArn: !GetAtt
+      - myDynamoDBTable
+      - StreamArn
+      FunctionName: !GetAtt
+      - ddbToFirehose
+      - Arn
+      StartingPosition: "TRIM_HORIZON"
+Outputs:
+  TableName:
+    Value: !Ref myDynamoDBTable
+    Description: Table name of the newly created DynamoDB table
+  BucketName:
+    Value: !Ref myS3Bucket
+    Description: My s3 bucket

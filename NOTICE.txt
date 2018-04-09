@@ -1,0 +1,2 @@
+aws-s3-nosql-offloading-blog
+ Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved. 
