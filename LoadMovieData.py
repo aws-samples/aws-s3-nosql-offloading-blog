@@ -1,5 +1,3 @@
-
-
 #########################################################################################
 #  Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # 
@@ -18,11 +16,12 @@
 #########################################################################################
 
 import os, sys, time, decimal
-from decimal import# 
+from decimal import *
 import boto3
 import json
 dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
 table = dynamodb.Table('Movies')
+
 
 def loadfile(infile):
     jsonobj = json.load(open(infile))
@@ -30,13 +29,13 @@ def loadfile(infile):
     for movie in jsonobj:
         lc += 1
         CreateTime = int(time.time())
-        ExpireTime = CreateTime + (1#  60#  60)
+        ExpireTime = CreateTime + (1* 60* 60)
         response = table.put_item(
            Item={
                 'Year': decimal.Decimal(movie['year']),
                 'Title': movie['title'],
-                'info': json.dumps(movie['info']), 
-                'CreateTime': CreateTime, 
+                'info': json.dumps(movie['info']),
+                'CreateTime': CreateTime,
                 'ExpireTime': ExpireTime
             }
         )
