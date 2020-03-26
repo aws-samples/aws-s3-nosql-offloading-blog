@@ -37,7 +37,13 @@ Resources:
         AttributeName: ExpireTime
   myS3Bucket:
     Type: 'AWS::S3::Bucket'
-  FirehoseDeliveryStream:
+    Properties: 
+      PublicAccessBlockConfiguration: 
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  firehoseDeliveryStream:
     DependsOn:
       - deliveryPolicy
     Type: 'AWS::KinesisFirehose::DeliveryStream'
@@ -69,9 +75,11 @@ Resources:
               StringEquals:
                 'sts:ExternalId': !Ref 'AWS::AccountId'
   deliveryPolicy:
-    Type: 'AWS::IAM::Policy'
+    Type: 'AWS::IAM::ManagedPolicy'
     Properties:
-      PolicyName: firehose_delivery_policy
+      Description: Managed policy for firehose 
+      Roles: 
+        - !Ref deliveryRole
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -93,15 +101,24 @@ Resources:
                 - - 'arn:aws:s3:::'
                   - !Ref myS3Bucket
                   - '*'
-      Roles:
-        - !Ref deliveryRole
+  lambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
   ddbToFirehose: 
       Type: "AWS::Lambda::Function"
       Properties: 
         Handler: "ddb-to-firehose.lambda_handler"
         Role: 
           Fn::GetAtt: 
-            - "LambdaExecutionRole"
+            - "lambdaExecutionRole"
             - "Arn"
         Code: 
           S3Bucket: !Ref LambdaCodeBucket
@@ -111,38 +128,46 @@ Resources:
         Environment:
           Variables:
             DeliveryStreamName: !Ref DynamoDBTableName
-        TracingConfig:
-          Mode: "Active"
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
+  logGroup:
+    Type: "AWS::Logs::LogGroup"
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+      LogGroupName: !Sub "/aws/lambda/${ddbToFirehose}"
+  lambdaExecutionPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      Description: Managed policy for lambda function 
+      Roles: 
+        - !Ref lambdaExecutionRole
+      PolicyDocument:
+        Version: 2012-10-17
         Statement:
-        - Effect: Allow
-          Principal:
-            Service:
-            - lambda.amazonaws.com
-          Action:
-          - sts:AssumeRole
-      Path: "/"
-      Policies:
-      - PolicyName: FirehoseFullAccess
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
           - Effect: Allow
             Action:
-            - logs:*
-            - firehose:*
-            - xray:*
-            - dynamodb:DescribeStream
-            - dynamodb:GetRecords
-            - dynamodb:GetShardIterator
-            - dynamodb:ListStreams
-            Resource: "*"
+              - 'firehose:PutRecord'
+              - 'firehose:PutRecordBatch'
+              - 'firehose:UpdateDestination'
+            Resource: !GetAtt 
+               - firehoseDeliveryStream
+               - Arn
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${logGroup}:*"
+          - Effect: Allow
+            Action:
+              - 'dynamodb:DescribeStream'
+              - 'dynamodb:GetRecords'
+              - 'dynamodb:GetShardIterator'
+              - 'dynamodb:ListStreams'
+            Resource: !GetAtt 
+               - myDynamoDBTable
+               - StreamArn
   EventSourceMapping: 
     Type: "AWS::Lambda::EventSourceMapping"
+    DependsOn:
+      - lambdaExecutionPolicy
     Properties: 
       EventSourceArn: !GetAtt
       - myDynamoDBTable
